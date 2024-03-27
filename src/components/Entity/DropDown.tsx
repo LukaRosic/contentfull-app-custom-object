@@ -3,7 +3,7 @@ import { Button, Dropdown, DropdownList, DropdownListItem } from '@contentful/fo
 import tokens from '@contentful/forma-36-tokens';
 
 interface DropDownProps {
-  onSelect: (type: 'entity' | 'string') => void;
+  onSelect: (type: 'entity' | 'string' | 'number' | 'decimal') => void;
   onToggle?: (open: boolean) => void;
   options?: string;
 }
@@ -13,6 +13,8 @@ const DropDown = ({ onSelect = () => {}, onToggle = () => {}, options }: DropDow
   let dropDownOptions: Record<string, boolean> = {
     entity: false,
     default: false,
+    decimal: false,
+    number: false,
   };
   options?.split('|').forEach((option) => (dropDownOptions[option] = true));
   return (
@@ -54,6 +56,28 @@ const DropDown = ({ onSelect = () => {}, onToggle = () => {}, options }: DropDow
             }}
           >
             Default
+          </DropdownListItem>
+        ) : null}
+        {dropDownOptions.number ? (
+          <DropdownListItem
+            onClick={() => {
+              onSelect('number');
+              onToggle(false);
+              setOpen(() => false);
+            }}
+          >
+            Number
+          </DropdownListItem>
+        ) : null}
+        {dropDownOptions.decimal ? (
+          <DropdownListItem
+            onClick={() => {
+              onSelect('decimal');
+              onToggle(false);
+              setOpen(() => false);
+            }}
+          >
+            Decimal
           </DropdownListItem>
         ) : null}
       </DropdownList>

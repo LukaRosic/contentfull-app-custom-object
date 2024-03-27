@@ -14,13 +14,13 @@ import {
   Icon,
 } from '@contentful/forma-36-react-components';
 import tokens from '@contentful/forma-36-tokens';
-import { FieldAPI, FieldExtensionSDK, WindowAPI } from '@contentful/app-sdk';
+import { EntryAPI, FieldAPI, FieldExtensionSDK, WindowAPI } from '@contentful/app-sdk';
 import { css } from 'emotion';
 import List from './List';
 import { Entity, InstanceParameters, Item, Tag } from '../types';
 import DropDown from './Entity/DropDown';
 import EntityList from './Entity/List';
-import { createEntity, createItem, createTag } from '../utils';
+import { createEntity, createItem } from '../utils';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -36,24 +36,30 @@ interface FieldProps {
  */
 const Field = ({ sdk }: FieldProps) => {
   const [items, setItems] = useState<Item[]>([]);
+  console.log('- > Field > items:', items);
   const [dropDownOpen, setDropDownOpen] = useState(false);
   const window: WindowAPI | null = sdk.window ?? null;
   const field: FieldAPI | null = sdk.field ?? null;
+  const entry: EntryAPI | null = sdk.entry ?? null;
+
+  const isAdmin = sdk.user.spaceMembership.admin;
+  const isMainLocale = field.locale === 'en-US';
+
   const {
     valueName = 'Value',
     keyName = 'Key',
     valueOptions = undefined,
     keyOptions = undefined,
-    uniqueKeys = false,
+    uniqueKeys = true,
     checkbox = false,
     taggable = false,
-    dropDownOptions = 'default'
+    dropDownOptions = 'default|entity|number|decimal',
   }: InstanceParameters = sdk.parameters?.instance ?? {};
   const itemTaggable = (item: Item) => Array.isArray(item.value) && taggable;
 
   useEffect(() => {
     resize();
-  });
+  }, []);
 
   const resize = () => {
     // This ensures our app has enough space to render
@@ -62,52 +68,59 @@ const Field = ({ sdk }: FieldProps) => {
     // Every time we change the value on the field, we update internal state
     field?.onValueChanged((value: Item[]) => {
       if (Array.isArray(value)) {
+        const parsedItems = value.map((item) => ({ ...item, [item.key]: item.value }));
         setItems(value);
+      }
+      if (!value || value?.length === 0) {
+        if (!isMainLocale) field.setValue(entry.fields[field.id].getValue());
       }
     });
   };
 
   /** Adds another item to the list */
-  const addNewItem = (type: 'string' | 'entity' = 'string') => {
+  const addNewItem = (type: 'string' | 'entity' | 'decimal' | 'number' = 'string') => {
     const item = createItem(type, taggable);
+    // console.log('items: ', item);
+    sdk.locales.available.forEach((locale) => {});
+
     field?.setValue([...items, item]);
   };
 
   /** Handle change */
   const onChange = (item: Item, val: string, property = 'value') => {
-    const itemList = items.concat();
-    const index = itemList.findIndex((i) => i.id === item.id);
-    let value: Item['value'] = val;
-    if (itemTaggable(item) && property === 'value') {
-      // clear whitespace and split possible multiple tags
-      const tags = val.split(',');
-      const newTags: Tag[] = [];
-      let id = -1;
-      tags.forEach((tag) => {
-        // split into key value (i.e. key:value => { key: string, value: string })
-        const [k, v] = tag.split(':');
-        if (item.value.length > 0 && id === -1) {
-          id = parseInt((item.value as Tag[]).reduce((prev, curr) => (prev.id > curr.id ? prev : curr)).id, 10);
-        }
-        id++;
-        newTags.push(
-          createTag({
-            id: `${id}`,
-            key: k ?? '',
-            value: v ?? '',
-          })
-        );
-      });
-      value = [...(item.value as Tag[]), ...newTags];
-    }
-    itemList.splice(index, 1, { ...item, [property]: value });
+    if (property !== 'key') {
+      const itemList = items.concat();
+      const index = itemList.findIndex((i) => i.id === item.id);
+      let value: Item['value'] = val;
 
-    field?.setValue(itemList);
+      itemList.splice(index, 1, { ...item, [property]: value });
+
+      field?.setValue(itemList);
+    }
+    // else = changed key field -> then change key in all other locales
+    else {
+      sdk.locales.available.forEach((locale) => {
+        const itemList = entry.fields[field.id].getValue(locale) as Item[];
+        const index = itemList.concat().findIndex((i) => i.id === item.id);
+        let value: Item['value'] = val;
+
+        itemList.splice(index, 1, { ...item, [property]: value });
+
+        entry.fields[field.id].setValue(itemList, locale);
+      });
+    }
   };
 
   /** Deletes an item from the list */
   const deleteItem = (item: Item) => {
-    field?.setValue(items.filter((i) => i.id !== item.id));
+    sdk.locales.available.forEach((locale) => {
+      const items: Item[] = entry.fields[field.id].getValue(locale);
+      entry.fields[field.id].setValue(
+        items.filter((i) => i.id !== item.id),
+        // items.filter((i) => i.key !== item.key),
+        locale
+      );
+    });
   };
 
   /** Sets checked property of an item, unsets all others */
@@ -197,6 +210,8 @@ const Field = ({ sdk }: FieldProps) => {
         );
         break;
       case 'string':
+      case 'number':
+      case 'decimal':
       default:
         component = valueOptions ? (
           <SelectField
@@ -220,17 +235,21 @@ const Field = ({ sdk }: FieldProps) => {
               id="value"
               name="value"
               value={itemTaggable(item) ? '' : (item.value as string)}
-              labelText={valueName}
+              labelText={`${valueName}  (${item.type})`}
               onChange={(e) => {
                 if (!itemTaggable(item)) {
-                  onChange(item, e.target.value);
+                  //@ts-expect-error
+                  if (item.type === 'number') onChange(item, parseInt(e.target.value, 10));
+                  //@ts-expect-error
+                  if (item.type === 'decimal') onChange(item, parseFloat(e.target.value));
+                  if (item.type === 'string') onChange(item, e.target.value);
                 }
               }}
               textInputProps={{
                 onKeyDown: (e: { key: string; target: Record<string, any> }) => {
                   if (itemTaggable(item)) {
                     if (e.key === 'Enter') {
-                      onChange(item, e.target.value);
+                      onChange(item, e.target.valueAsNumber);
                     }
                   }
                 },
@@ -268,7 +287,7 @@ const Field = ({ sdk }: FieldProps) => {
     return component;
   };
 
-  const Key = (item: Item, index: number) => {
+  const Key = (item: Item, index: number, isAdmin: boolean, isMainLocale: boolean) => {
     return keyOptions ? (
       <SelectField
         onChange={(e) => onChange(item, e.target.value, 'key')}
@@ -302,6 +321,7 @@ const Field = ({ sdk }: FieldProps) => {
         }}
         textInputProps={{
           type: 'text',
+          disabled: !isAdmin || !isMainLocale,
           error: uniqueKeys && items.some((i, y) => index !== y && i.key === item.key),
         }}
       />
@@ -320,10 +340,12 @@ const Field = ({ sdk }: FieldProps) => {
           >
             {items.map((item, index) => (
               <Row
+                isMainLocale={isMainLocale}
+                isAdmin={isAdmin}
                 key={`field-row-${index}`}
                 item={item}
                 checkbox={checkbox}
-                keyComponent={Key(item, index)}
+                keyComponent={Key(item, index, isAdmin, isMainLocale)}
                 valueComponent={Value(item)}
                 select={() => {
                   setActiveOption(item);
@@ -334,13 +356,17 @@ const Field = ({ sdk }: FieldProps) => {
           </List>
         </TableBody>
       </Table>
-      <DropDown options={dropDownOptions} onToggle={(open) => setDropDownOpen(open)} onSelect={addNewItem} />
+      {isAdmin && isMainLocale && (
+        <DropDown options={dropDownOptions} onToggle={(open) => setDropDownOpen(open)} onSelect={addNewItem} />
+      )}
     </div>
   );
 };
 
 interface RowProps {
   item: Item;
+  isAdmin: boolean;
+  isMainLocale: boolean;
   checkbox: InstanceParameters['checkbox'];
   keyComponent: ReactElement;
   valueComponent: ReactElement;
@@ -348,7 +374,7 @@ interface RowProps {
   deleteRow: MouseEventHandler;
 }
 
-const Row = ({ item, checkbox, deleteRow, select, keyComponent, valueComponent }: RowProps) => {
+const Row = ({ item, checkbox, deleteRow, select, keyComponent, valueComponent, isAdmin, isMainLocale }: RowProps) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
 
   const style = {
@@ -383,7 +409,7 @@ const Row = ({ item, checkbox, deleteRow, select, keyComponent, valueComponent }
             backgroundColor: '#f7f9fa',
           })}
         >
-          <div
+          {/* <div
             {...attributes}
             {...listeners}
             className={css({
@@ -397,7 +423,7 @@ const Row = ({ item, checkbox, deleteRow, select, keyComponent, valueComponent }
             })}
           >
             <Icon size="medium" color={isDragging ? 'positive' : 'muted'} icon="DragTrimmed" />
-          </div>
+          </div> */}
           {checkbox ? (
             <RadioButtonField
               checked={item.checked}
@@ -411,9 +437,12 @@ const Row = ({ item, checkbox, deleteRow, select, keyComponent, valueComponent }
         </TableCell>
         <TableCell className={css({ flex: '1 1 auto', maxWidth: 320 })}>{keyComponent}</TableCell>
         <TableCell className={css({ flex: '1 1 auto', maxWidth: 320 })}>{valueComponent}</TableCell>
-        <TableCell align="right">
-          <EditorToolbarButton label="delete" icon="Delete" onClick={deleteRow} />
-        </TableCell>
+        {isAdmin && isMainLocale && (
+          // {isAdmin && (
+          <TableCell align="right">
+            <EditorToolbarButton label="delete" icon="Delete" onClick={deleteRow} />
+          </TableCell>
+        )}
       </TableRow>
     </div>
   );

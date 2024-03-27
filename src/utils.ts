@@ -1,7 +1,7 @@
 import { Entity, Item, Tag } from './types';
 import { v4 as uuid } from 'uuid';
 
-export function createItem(type: 'string' | 'entity' = 'string', taggable = false) {
+export function createItem(type: 'string' | 'entity' | 'number' | 'decimal' = 'string', taggable = false) {
   let value: Item['value'];
   switch (type) {
     case 'entity':
